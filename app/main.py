@@ -2,8 +2,11 @@ import argparse
 import json
 import os
 import sys
+from typing import Any, List
 
 from openai import OpenAI
+
+from .tools import ReadTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
@@ -11,42 +14,28 @@ MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", default="anthropic/claude-haiku-
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("-p", required=True)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", required=True)
+    args = parser.parse_args()
 
     if not API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    messages = [
+    messages: List[Any] = [
         {"role": "user", "content": args.p},
     ]
+
+    toolbox = Toolbox()
+    toolbox.add(ReadTool)
+    toolbox.add(WriteTool)
 
     while True:
         chat = client.chat.completions.create(
             model=MODEL_NAME,
             messages=messages,
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "Read",
-                        "description": "Read and return the contents of a file",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "file_path": {
-                                    "type": "string",
-                                    "description": "The path to the file to read",
-                                }
-                            },
-                            "required": ["file_path"],
-                        },
-                    },
-                }
-            ],
+            tools=toolbox.tool_schemas,
         )
 
         if not chat.choices or len(chat.choices) == 0:
@@ -59,18 +48,24 @@ def main():
 
         match choice.finish_reason:
             case "tool_calls":
-                for tool_call in message.tool_calls:
-                    if tool_call.type == "function" and tool_call.function.name == "Read":
-                        arguments = json.loads(tool_call.function.arguments)
+                assert message.tool_calls is not None
 
-                        file_path = arguments["file_path"]
-                        with open(file_path, "r") as f:
-                            content = f.read()
+                for tool_call in message.tool_calls:
+                    if tool_call.type != "function":
+                        raise RuntimeError(f"unexpected tool call type: {tool_call.type}")
+
+                    tool_name = tool_call.function.name
+                    arguments = json.loads(tool_call.function.arguments)
+
+                    arguments_str = ", ".join(f"{key}={repr(value)}" for key, value in arguments.items())
+                    print(f"tool call: {tool_name}({arguments_str})", file=sys.stderr)
+
+                    result = toolbox.use(tool_call.function.name, arguments)
 
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": content,
+                        "content": result,
                     })
 
             case "stop":
