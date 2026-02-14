@@ -66,6 +66,33 @@ class WriteTool(Tool):
             return f"Error writing to file {self.file_path}: {error}"
 
 
+class BashTool(Tool):
+
+    name = "Bash"
+    description = "Execute a shell command"
+
+    def __init__(
+        self,
+        command: Annotated[str, {
+            "type": "string",
+            "description": "The command to execute",
+        }],
+    ):
+        self.command = command
+
+    def execute(self) -> str:
+        import subprocess
+
+        try:
+            result = subprocess.run(self.command, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                return f"Error executing command {self.command}: {result.stderr.strip()}"
+
+            return result.stdout.strip()
+        except Exception as error:
+            return f"Error executing command {self.command}: {error}"
+
+
 class Toolbox:
 
     def __init__(self):

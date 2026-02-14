@@ -6,7 +6,7 @@ from typing import Any, List
 
 from openai import OpenAI
 
-from .tools import ReadTool, Toolbox, WriteTool
+from .tools import BashTool, ReadTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
@@ -30,6 +30,7 @@ def main():
     toolbox = Toolbox()
     toolbox.add(ReadTool)
     toolbox.add(WriteTool)
+    toolbox.add(BashTool)
 
     while True:
         chat = client.chat.completions.create(
