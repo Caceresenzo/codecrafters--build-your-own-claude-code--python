@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 
@@ -46,7 +47,25 @@ def main():
     if not chat.choices or len(chat.choices) == 0:
         raise RuntimeError("no choices in response")
 
-    print(chat.choices[0].message.content)
+    choice = chat.choices[0]
+
+    match choice.finish_reason:
+        case "tool_calls":
+            for tool_call in choice.message.tool_calls:
+                if tool_call.type == "function" and tool_call.function.name == "Read":
+                    arguments = json.loads(tool_call.function.arguments)
+
+                    file_path = arguments["file_path"]
+                    with open(file_path, "r") as f:
+                        content = f.read()
+
+                    print(content)
+
+        case "stop":
+            print(choice.message.content)
+
+        case _:
+            raise RuntimeError(f"unexpected finish reason: {choice.finish_reason}")
 
 
 if __name__ == "__main__":
