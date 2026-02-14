@@ -20,52 +20,65 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    chat = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": args.p}],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "Read",
-                    "description": "Read and return the contents of a file",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "file_path": {
-                                "type": "string",
-                                "description": "The path to the file to read",
-                            }
+    messages = [
+        {"role": "user", "content": args.p},
+    ]
+
+    while True:
+        chat = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "description": "Read and return the contents of a file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {
+                                    "type": "string",
+                                    "description": "The path to the file to read",
+                                }
+                            },
+                            "required": ["file_path"],
                         },
-                        "required": ["file_path"],
                     },
-                },
-            }
-        ],
-    )
+                }
+            ],
+        )
 
-    if not chat.choices or len(chat.choices) == 0:
-        raise RuntimeError("no choices in response")
+        if not chat.choices or len(chat.choices) == 0:
+            raise RuntimeError("no choices in response")
 
-    choice = chat.choices[0]
+        choice = chat.choices[0]
+        message = choice.message
 
-    match choice.finish_reason:
-        case "tool_calls":
-            for tool_call in choice.message.tool_calls:
-                if tool_call.type == "function" and tool_call.function.name == "Read":
-                    arguments = json.loads(tool_call.function.arguments)
+        messages.append(message)
 
-                    file_path = arguments["file_path"]
-                    with open(file_path, "r") as f:
-                        content = f.read()
+        match choice.finish_reason:
+            case "tool_calls":
+                for tool_call in message.tool_calls:
+                    if tool_call.type == "function" and tool_call.function.name == "Read":
+                        arguments = json.loads(tool_call.function.arguments)
 
-                    print(content)
+                        file_path = arguments["file_path"]
+                        with open(file_path, "r") as f:
+                            content = f.read()
 
-        case "stop":
-            print(choice.message.content)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": content,
+                    })
 
-        case _:
-            raise RuntimeError(f"unexpected finish reason: {choice.finish_reason}")
+            case "stop":
+                print(message.content)
+                break
+
+            case _:
+                raise RuntimeError(f"unexpected finish reason: {choice.finish_reason}")
 
 
 if __name__ == "__main__":
