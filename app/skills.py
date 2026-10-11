@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
@@ -10,6 +11,20 @@ class Skill:
     name: str
     description: str
     content: str
+
+    def format(self, arguments: list[str]) -> str:
+        formatted = self.content
+
+        if "$ARGUMENTS" in formatted:
+            formatted = formatted.replace("$ARGUMENTS", " ".join(arguments))
+
+        def replacer(match: re.Match[str]):
+            index = int(match.group(1) or match.group(2))
+            return arguments[index] if index < len(arguments) else ""
+
+        formatted = re.sub(rf"(?:\$(\d+)|\$ARGUMENTS\[(\d+)\])", replacer, formatted)
+
+        return formatted
 
 
 class Skillbox:

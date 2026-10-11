@@ -1,13 +1,13 @@
 import argparse
 import json
 import os
+import shlex
 import sys
 from typing import Any, List
 
 from openai import OpenAI
 
-from app.skills import Skillbox
-
+from .skills import Skillbox
 from .tools import BashTool, ReadTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -42,10 +42,11 @@ def main():
     user_input = args.p
 
     if user_input.startswith("/"):
-        skill = skillbox.get(user_input[1:])
+        arguments = shlex.split(user_input)
+        skill = skillbox.get(arguments[0][1:])
 
         if skill is not None:
-            user_input = skill.content
+            user_input = skill.format(arguments[1:])
 
     messages: List[Any] = [
         *skill_messages,
