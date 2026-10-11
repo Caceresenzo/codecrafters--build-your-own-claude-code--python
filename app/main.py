@@ -7,7 +7,7 @@ from typing import Any, List
 
 from openai import OpenAI
 
-from .skills import Skillbox
+from .skills import Skill, Skillbox
 from .tools import BashTool, ReadTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -41,17 +41,35 @@ def main():
 
     user_input = args.p
 
-    if user_input.startswith("/"):
-        arguments = shlex.split(user_input)
-        skill = skillbox.get(arguments[0][1:])
-
-        if skill is not None:
-            user_input = skill.format(arguments[1:])
-
     messages: List[Any] = [
         *skill_messages,
-        {"role": "user", "content": user_input},
     ]
+
+    if user_input.startswith("/"):
+        arguments = shlex.split(user_input)
+
+        skill_arguments: List[str] = []
+        skills: List[Skill] = []
+
+        for argument in arguments:
+            if argument.startswith("/"):
+                skill_name = argument[1:]
+
+                skill = skillbox.get(skill_name)
+                if skill is None:
+                    print(f"skill: {skill_name}: not found", file=sys.stderr)
+                else:
+                    skills.append(skill)
+
+            else:
+                skill_arguments.append(argument)
+
+        for skill in skills:
+            formatted = skill.format(skill_arguments)
+            messages.append({"role": "user", "content": formatted})
+
+    else:
+        messages.append({"role": "user", "content": user_input})
 
     for message in messages:
         print(f"message: {message['role']}: {message['content']!r}", file=sys.stderr)
