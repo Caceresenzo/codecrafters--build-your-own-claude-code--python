@@ -6,11 +6,13 @@ from typing import Any, List
 
 from openai import OpenAI
 
+from app.skills import Skillbox
+
 from .tools import BashTool, ReadTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
-MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", default="anthropic/claude-haiku-4.5")  # z-ai/glm-4.5-air:free
+MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", default="anthropic/claude-haiku-4.5")  # nvidia/nemotron-3.5-lightning:free
 
 
 def main():
@@ -23,14 +25,24 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    messages: List[Any] = [
-        {"role": "user", "content": args.p},
-    ]
-
     toolbox = Toolbox()
     toolbox.add(ReadTool)
     toolbox.add(WriteTool)
     toolbox.add(BashTool)
+
+    skillbox = Skillbox()
+    skillbox.locate()
+
+    skill_messages: List[Any] = (
+        [{"role": "system", "content": "You have access to the following skills:\n\n- " + "\n- ".join(f"{skill.name}: {skill.description}" for skill in skillbox.skills)}]
+        if skillbox.skills
+        else []
+    )
+
+    messages: List[Any] = [
+        *skill_messages,
+        {"role": "user", "content": args.p},
+    ]
 
     while True:
         chat = client.chat.completions.create(
