@@ -66,7 +66,9 @@ def main():
 
         for skill in skills:
             formatted = skill.format(skill_arguments)
-            messages.append({"role": "user", "content": formatted})
+
+            prefix = f"User invoked a the skill: {skill.name} (located at {skill.directory})"
+            messages.append({"role": "user", "content": f"{prefix}\n{formatted}"})
 
     else:
         messages.append({"role": "user", "content": user_input})

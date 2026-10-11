@@ -7,7 +7,7 @@ from typing import List, Optional
 
 @dataclass
 class Skill:
-    path: Path
+    directory: Path
     name: str
     description: str
     content: str
@@ -70,7 +70,7 @@ class Skillbox:
                 content = fd.read().strip()
 
                 self.add(Skill(
-                    path=markdown_path,
+                    directory=markdown_path.parent,
                     name=name,
                     description=description,
                     content=content
