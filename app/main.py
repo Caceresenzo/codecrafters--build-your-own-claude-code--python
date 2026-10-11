@@ -8,7 +8,7 @@ from typing import Any, List
 from openai import OpenAI
 
 from .skills import Skill, Skillbox
-from .tools import BashTool, ReadTool, Toolbox, WriteTool
+from .tools import BashTool, ReadTool, SkillTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
@@ -25,16 +25,17 @@ def main():
 
     client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-    toolbox = Toolbox()
-    toolbox.add(ReadTool)
-    toolbox.add(WriteTool)
-    toolbox.add(BashTool)
-
     skillbox = Skillbox()
     skillbox.locate()
 
+    toolbox = Toolbox()
+    toolbox.add(ReadTool())
+    toolbox.add(WriteTool())
+    toolbox.add(BashTool())
+    toolbox.add(SkillTool(skillbox))
+
     skill_messages: List[Any] = (
-        [{"role": "system", "content": "You have access to the following skills:\n\n- " + "\n- ".join(f"{skill.name}: {skill.description}" for skill in skillbox.skills)}]
+        [{"role": "system", "content": "You have access to the following skills:\n\n- " + "\n- ".join(f"{skill.name}: {skill.description}" for skill in skillbox.skills) + "\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns."}]
         if skillbox.skills
         else []
     )
