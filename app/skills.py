@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -9,6 +9,7 @@ class Skill:
     path: Path
     name: str
     description: str
+    content: str
 
 
 class Skillbox:
@@ -18,6 +19,11 @@ class Skillbox:
 
     def add(self, skill: Skill):
         self.skills.append(skill)
+
+    def get(self, name: str) -> Optional[Skill]:
+        for skill in self.skills:
+            if skill.name == name:
+                return skill
 
     def locate(self):
         markdown_files = glob(".claude/skills/*/SKILL.md")
@@ -46,8 +52,11 @@ class Skillbox:
                     elif key == "description":
                         description = value
 
+                content = fd.read().strip()
+
                 self.add(Skill(
                     path=markdown_path,
                     name=name,
-                    description=description
+                    description=description,
+                    content=content
                 ))

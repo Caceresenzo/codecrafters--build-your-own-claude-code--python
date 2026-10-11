@@ -39,10 +39,21 @@ def main():
         else []
     )
 
+    user_input = args.p
+
+    if user_input.startswith("/"):
+        skill = skillbox.get(user_input[1:])
+
+        if skill is not None:
+            user_input = skill.content
+
     messages: List[Any] = [
         *skill_messages,
-        {"role": "user", "content": args.p},
+        {"role": "user", "content": user_input},
     ]
+
+    for message in messages:
+        print(f"message: {message['role']}: {message['content']!r}", file=sys.stderr)
 
     while True:
         chat = client.chat.completions.create(
@@ -75,11 +86,14 @@ def main():
 
                     result = toolbox.use(tool_call.function.name, arguments)
 
-                    messages.append({
+                    message: Any = {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": result,
-                    })
+                    }
+                    messages.append(message)
+
+                    print(f"message: {message['role']}: {message['content']!r}", file=sys.stderr)
 
             case "stop":
                 print(message.content)
