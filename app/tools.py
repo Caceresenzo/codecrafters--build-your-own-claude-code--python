@@ -1,9 +1,12 @@
 import shlex
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .skills import Skillbox
+
+if TYPE_CHECKING:
+    from .agent import Agent
 
 
 @dataclass
@@ -22,7 +25,7 @@ class Tool(ABC):
     parameters: List[ToolParameter]
 
     @abstractmethod
-    def execute(self, **kwargs: Any) -> Any:
+    def execute(self, agent: "Agent", **kwargs: Any) -> Any:
         pass
 
 
@@ -38,7 +41,7 @@ class ReadTool(Tool):
         )
     ]
 
-    def execute(self, file_path: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def execute(self, agent: "Agent", file_path: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         try:
             with open(file_path, "r") as fd:
                 return fd.read()
@@ -63,7 +66,7 @@ class WriteTool(Tool):
         )
     ]
 
-    def execute(self, file_path: str, content: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def execute(self, agent: "Agent", file_path: str, content: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         try:
             with open(file_path, "w") as fd:
                 fd.write(content)
@@ -85,7 +88,7 @@ class BashTool(Tool):
         )
     ]
 
-    def execute(self, command: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def execute(self, agent: "Agent", command: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         import subprocess
 
         try:
@@ -122,13 +125,17 @@ class SkillTool(Tool):
     ):
         self.skillbox = skillbox
 
-    def execute(self, name: str, args: Optional[str] = None, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def execute(self, agent: "Agent", name: str, args: Optional[str] = None, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         skill = self.skillbox.get(name)
         if skill is None:
             return f"Skill '{name}' not found"
 
+        child = agent.fork(name="sub-agent")
+
         arguments = shlex.split(args) if args else []
-        return skill.format(arguments)
+        child.push_message({"role": "user", "content": skill.format(arguments, include_location=False)})
+
+        return child.loop()
 
 
 class Toolbox:
@@ -167,9 +174,9 @@ class Toolbox:
             }
         )
 
-    def use(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    def use(self, agent: "Agent", tool_name: str, arguments: Dict[str, Any]) -> Any:
         tool = self.tool_by_name.get(tool_name)
         if tool is None:
             raise ValueError(f"tool {tool_name} not found in toolbox")
 
-        return tool.execute(**arguments)
+        return tool.execute(agent, **arguments)

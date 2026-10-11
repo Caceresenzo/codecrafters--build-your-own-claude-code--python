@@ -1,8 +1,14 @@
 import re
 from dataclasses import dataclass
+from enum import Enum
 from glob import glob
 from pathlib import Path
 from typing import List, Optional
+
+
+class SkillContext(Enum):
+    DEFAULT = "default"
+    FORK = "fork"
 
 
 @dataclass
@@ -10,9 +16,10 @@ class Skill:
     directory: Path
     name: str
     description: str
+    context: SkillContext
     content: str
 
-    def format(self, arguments: list[str]) -> str:
+    def format(self, arguments: list[str], include_location: bool = True) -> str:
         formatted = self.content
 
         if "$ARGUMENTS" in formatted:
@@ -23,6 +30,9 @@ class Skill:
             return arguments[index] if index < len(arguments) else ""
 
         formatted = re.sub(rf"(?:\$(\d+)|\$ARGUMENTS\[(\d+)\])", replacer, formatted)
+
+        if include_location:
+            formatted = f"User invoked a the skill: {self.name} (located at {self.directory})\n{formatted}"
 
         return formatted
 
@@ -52,6 +62,7 @@ class Skillbox:
 
                 name: str = ""
                 description: str = ""
+                context: SkillContext = SkillContext.DEFAULT
 
                 while True:
                     line = fd.readline().strip()
@@ -66,6 +77,8 @@ class Skillbox:
                         name = value
                     elif key == "description":
                         description = value
+                    elif key == "context":
+                        context = SkillContext(value)
 
                 content = fd.read().strip()
 
@@ -73,5 +86,6 @@ class Skillbox:
                     directory=markdown_path.parent,
                     name=name,
                     description=description,
-                    content=content
+                    content=content,
+                    context=context
                 ))
