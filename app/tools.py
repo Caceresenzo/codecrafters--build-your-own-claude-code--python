@@ -1,7 +1,9 @@
 import os
 import shlex
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
+from io import StringIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from .lsp_client import LSPClient
@@ -150,7 +152,7 @@ class LspTool(Tool):
         ToolParameter(
             name="operation",
             type="string",
-            enum=["goToDefinition"],
+            enum=["goToDefinition", "findReferences"],
         ),
         ToolParameter(
             name=("file_path", "filePath"),
@@ -174,35 +176,79 @@ class LspTool(Tool):
     def __init__(self, client: LSPClient):
         self.client = client
 
+        self._handlers = {
+            "goToDefinition": self.go_to_definition,
+            "findReferences": self.find_references,
+        }
+
     def execute(self, agent: "Agent", operation: str, file_path: str, line: int, character: int, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         file_path = os.path.abspath(file_path)
         if not os.path.exists(file_path):
             return f"File '{file_path}' not found"
 
-        if operation == "goToDefinition":
-            with open(file_path, "r", encoding="utf-8") as fd:
-                text = fd.read()
-
-            uri = f"file://{file_path}"
-            extension = os.path.splitext(file_path)[1]
-
-            self.client.notify("textDocument/didOpen", {
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": self.client.extension_to_language.get(extension, ""),
-                    "version": 1,
-                    "text": text,
-                }
-            })
-
-            response = self.client.request("textDocument/definition", {
-                "textDocument": {"uri": uri},
-                "position": {"line": line - 1, "character": character - 1}
-            })
-
-            return f"Defined in {response['uri']}, from {self._to_range_string(response['range']['start'])} to {self._to_range_string(response['range']['end'])}"
+        handler = self._handlers.get(operation)
+        if handler:
+            return handler(file_path, line, character)
 
         return "LSP is not implemented yet"
+
+    def notify_open(self, file_path: str) -> str:
+        with open(file_path, "r", encoding="utf-8") as fd:
+            text = fd.read()
+
+        uri = f"file://{file_path}"
+        extension = os.path.splitext(file_path)[1]
+
+        self.client.notify("textDocument/didOpen", {
+            "textDocument": {
+                "uri": uri,
+                "languageId": self.client.extension_to_language.get(extension, ""),
+                "version": 1,
+                "text": text,
+            }
+        })
+
+        return uri
+
+    def go_to_definition(self, file_path: str, line: int, character: int) -> str:
+        uri = self.notify_open(file_path)
+
+        response = self.client.request("textDocument/definition", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line - 1, "character": character - 1}
+        })
+
+        return f"Defined in {response['uri']}, from {self._to_range_string(response['range']['start'])} to {self._to_range_string(response['range']['end'])}"
+
+    def find_references(self, file_path: str, line: int, character: int) -> str:
+        uri = self.notify_open(file_path)
+
+        response = self.client.request("textDocument/references", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line - 1, "character": character - 1},
+            "context": {"includeDeclaration": True}
+        })
+
+        range_by_uri: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        reference_count = 0
+
+        for item in response:
+            uri = item["uri"]
+            range = item["range"]
+
+            range_by_uri[uri].append(range)
+            reference_count += 1
+
+        reply = StringIO()
+        reply.write(f"Found {reference_count} references across {len(range_by_uri)} files:\n")
+
+        for uri, ranges in range_by_uri.items():
+            reply.write(f"\n{uri.lstrip('file://')}:")
+
+            for range in ranges:
+                reply.write(f"  Line {self._to_range_string(range['start'])}\n")
+
+        return reply.getvalue()
 
     def _to_range_string(self, range: Dict[str, Any]) -> str:
         return f"{range['line'] + 1}:{range['character'] + 1}"
