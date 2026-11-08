@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from io import StringIO
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .lsp_client import LSPClient
 from .skills import Skillbox
@@ -72,14 +72,28 @@ class WriteTool(Tool):
         )
     ]
 
+    def __init__(
+        self,
+        before_open: Optional[Callable[[str], Any]] = None,
+        after_write: Optional[Callable[[str, str], Any]] = None,
+    ):
+        self.before_open = before_open
+        self.after_write = after_write
+
     def execute(self, agent: "Agent", file_path: str, content: str, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+        if self.before_open:
+            self.before_open(file_path)
+
         try:
             with open(file_path, "w") as fd:
                 fd.write(content)
-
-            return f"Successfully wrote {len(content)} characters to {file_path}"
         except Exception as error:
             return f"Error writing to file {file_path}: {error}"
+
+        if self.after_write:
+            self.after_write(file_path, content)
+
+        return f"Successfully wrote {len(content)} characters to {file_path}"
 
 
 class BashTool(Tool):
@@ -181,6 +195,8 @@ class LspTool(Tool):
             "findReferences": self.find_references,
         }
 
+        self._file_versions: Dict[str, int] = defaultdict(int)
+
     def execute(self, agent: "Agent", operation: str, file_path: str, line: int, character: int, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         file_path = os.path.abspath(file_path)
         if not os.path.exists(file_path):
@@ -192,39 +208,68 @@ class LspTool(Tool):
 
         return "LSP is not implemented yet"
 
-    def notify_open(self, file_path: str) -> str:
+    def _to_uri(self, file_path: str) -> str:
+        return f"file://{os.path.abspath(file_path)}"
+
+    def notify_open(self, file_path: str) -> Tuple[str, int]:
+        uri = self._to_uri(file_path)
+        version = self._file_versions[uri]
+
+        if version != 0:
+            return uri, version
+
         with open(file_path, "r", encoding="utf-8") as fd:
             text = fd.read()
 
-        uri = f"file://{file_path}"
         extension = os.path.splitext(file_path)[1]
+        version = self._file_versions[uri] = 1
 
         self.client.notify("textDocument/didOpen", {
             "textDocument": {
                 "uri": uri,
                 "languageId": self.client.extension_to_language.get(extension, ""),
-                "version": 1,
+                "version": version,
                 "text": text,
             }
         })
 
-        return uri
+        return uri, version
+
+    def notify_changed(self, file_path: str, content: str) -> Tuple[str, int]:
+        uri, version = self.notify_open(file_path)
+
+        version += 1
+        self._file_versions[uri] = version
+
+        self.client.notify("textDocument/didChange", {
+            "textDocument": {
+                "uri": uri,
+                "version": version,
+            },
+            "contentChanges": [
+                {
+                    "text": content
+                }
+            ]
+        })
+
+        return uri, version
 
     def go_to_definition(self, file_path: str, line: int, character: int) -> str:
-        uri = self.notify_open(file_path)
+        uri, version = self.notify_open(file_path)
 
         response = self.client.request("textDocument/definition", {
-            "textDocument": {"uri": uri},
+            "textDocument": {"uri": uri, "version": version},
             "position": {"line": line - 1, "character": character - 1}
         })
 
         return f"Defined in {response['uri']}, from {self._to_range_string(response['range']['start'])} to {self._to_range_string(response['range']['end'])}"
 
     def find_references(self, file_path: str, line: int, character: int) -> str:
-        uri = self.notify_open(file_path)
+        uri, version = self.notify_open(file_path)
 
         response = self.client.request("textDocument/references", {
-            "textDocument": {"uri": uri},
+            "textDocument": {"uri": uri, "version": version},
             "position": {"line": line - 1, "character": character - 1},
             "context": {"includeDeclaration": True}
         })

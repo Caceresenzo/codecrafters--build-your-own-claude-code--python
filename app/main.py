@@ -30,14 +30,21 @@ def main():
 
     toolbox = Toolbox()
     toolbox.add(ReadTool())
-    toolbox.add(WriteTool())
     toolbox.add(BashTool())
     toolbox.add(SkillTool(skillbox))
 
     lsp_client = LSPClient.from_environment()
     if lsp_client is not None:
         print("LSP client connected", file=sys.stderr)
-        toolbox.add(LspTool(lsp_client))
+
+        lsp_tool = LspTool(lsp_client)
+        toolbox.add(lsp_tool)
+        toolbox.add(WriteTool(
+            before_open=lsp_tool.notify_open,
+            after_write=lsp_tool.notify_changed,
+        ))
+    else:
+        toolbox.add(WriteTool())
 
     claude = Agent(
         name="claude",
