@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from .lsp_client import LSPClient
 from .skills import Skillbox
 
 if TYPE_CHECKING:
@@ -14,7 +15,9 @@ class ToolParameter:
 
     name: str
     type: str
-    description: str
+    description: Optional[str] = None
+    enum: Optional[List[str]] = None
+    minimum: Optional[int] = None
     required: bool = True
 
 
@@ -138,6 +141,42 @@ class SkillTool(Tool):
         return child.loop()
 
 
+class LspTool(Tool):
+
+    name = "LSP"
+    description = "Returns the file, line, and character where a symbol is defined."
+    parameters = [
+        ToolParameter(
+            name="operation",
+            type="string",
+            enum=["goToDefinition"],
+        ),
+        ToolParameter(
+            name="filePath",
+            type="string",
+            description="Absolute path, or a path relative to the agent's current working directory.",
+        ),
+        ToolParameter(
+            name="line",
+            type="integer",
+            minimum=1,
+            description="1-based line number of the symbol.",
+        ),
+        ToolParameter(
+            name="character",
+            type="integer",
+            minimum=1,
+            description="1-based character offset in UTF-16 code units (same as character count for ASCII).",
+        )
+    ]
+
+    def __init__(self, client: LSPClient):
+        self.client = client
+
+    def execute(self, agent: "Agent", **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return "LSP is not implemented yet"
+
+
 class Toolbox:
 
     def __init__(self):
@@ -152,8 +191,14 @@ class Toolbox:
 
         for parameter in tool.parameters:
             parameter_schemas[parameter.name] = {
-                "type": parameter.type,
-                "description": parameter.description,
+                key: value
+                for key, value in {
+                    "type": parameter.type,
+                    "enum": parameter.enum,
+                    "minimum": parameter.minimum,
+                    "description": parameter.description,
+                }.items()
+                if value is not None
             }
 
             if parameter.required:

@@ -1,15 +1,18 @@
 import argparse
 import os
+import sys
 
 from openai import OpenAI
 
+from app.lsp_client import LSPClient
+
 from .agent import Agent
 from .skills import Skillbox
-from .tools import BashTool, ReadTool, SkillTool, Toolbox, WriteTool
+from .tools import BashTool, LspTool, ReadTool, SkillTool, Toolbox, WriteTool
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = os.getenv("OPENROUTER_BASE_URL", default="https://openrouter.ai/api/v1")
-MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", default="anthropic/claude-haiku-4.5")  # nvidia/nemotron-3.5-lightning:free
+MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME", default="anthropic/claude-haiku-4.5")  # nvidia/nemotron-3-ultra-550b-a55b:free
 
 
 def main():
@@ -30,6 +33,11 @@ def main():
     toolbox.add(WriteTool())
     toolbox.add(BashTool())
     toolbox.add(SkillTool(skillbox))
+
+    lsp_client = LSPClient.from_environment()
+    if lsp_client is not None:
+        print("LSP client connected", file=sys.stderr)
+        toolbox.add(LspTool(lsp_client))
 
     claude = Agent(
         name="claude",
