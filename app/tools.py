@@ -1,7 +1,8 @@
+import os
 import shlex
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from .lsp_client import LSPClient
 from .skills import Skillbox
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
 @dataclass
 class ToolParameter:
 
-    name: str
+    name: Union[str, Tuple[str, str]]
     type: str
     description: Optional[str] = None
     enum: Optional[List[str]] = None
@@ -152,7 +153,7 @@ class LspTool(Tool):
             enum=["goToDefinition"],
         ),
         ToolParameter(
-            name="filePath",
+            name=("file_path", "filePath"),
             type="string",
             description="Absolute path, or a path relative to the agent's current working directory.",
         ),
@@ -173,8 +174,38 @@ class LspTool(Tool):
     def __init__(self, client: LSPClient):
         self.client = client
 
-    def execute(self, agent: "Agent", **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def execute(self, agent: "Agent", operation: str, file_path: str, line: int, character: int, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
+        file_path = os.path.abspath(file_path)
+        if not os.path.exists(file_path):
+            return f"File '{file_path}' not found"
+
+        if operation == "goToDefinition":
+            with open(file_path, "r", encoding="utf-8") as fd:
+                text = fd.read()
+
+            uri = f"file://{file_path}"
+            extension = os.path.splitext(file_path)[1]
+
+            self.client.notify("textDocument/didOpen", {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": self.client.extension_to_language.get(extension, ""),
+                    "version": 1,
+                    "text": text,
+                }
+            })
+
+            response = self.client.request("textDocument/definition", {
+                "textDocument": {"uri": uri},
+                "position": {"line": line - 1, "character": character - 1}
+            })
+
+            return f"Defined in {response['uri']}, from {self._to_range_string(response['range']['start'])} to {self._to_range_string(response['range']['end'])}"
+
         return "LSP is not implemented yet"
+
+    def _to_range_string(self, range: Dict[str, Any]) -> str:
+        return f"{range['line'] + 1}:{range['character'] + 1}"
 
 
 class Toolbox:
@@ -190,9 +221,14 @@ class Toolbox:
         required_parameters: List[str] = []
 
         for parameter in tool.parameters:
-            parameter_schemas[parameter.name] = {
+            if isinstance(parameter.name, tuple):
+                name = parameter.name[1]
+            else:
+                name = parameter.name
+
+            parameter_schemas[name] = {
                 key: value
-                for key, value in {
+                for key, value in {  # pyright: ignore[reportUnknownVariableType]
                     "type": parameter.type,
                     "enum": parameter.enum,
                     "minimum": parameter.minimum,
@@ -202,7 +238,7 @@ class Toolbox:
             }
 
             if parameter.required:
-                required_parameters.append(parameter.name)
+                required_parameters.append(name)
 
         self.tool_schemas.append(
             {
@@ -224,4 +260,13 @@ class Toolbox:
         if tool is None:
             raise ValueError(f"tool {tool_name} not found in toolbox")
 
-        return tool.execute(agent, **arguments)
+        remapped_arguments: Dict[str, Any] = {}
+        for parameter in tool.parameters:
+            if isinstance(parameter.name, tuple):
+                python_name, original_name = parameter.name
+            else:
+                python_name = original_name = parameter.name
+
+            remapped_arguments[python_name] = arguments[original_name]
+
+        return tool.execute(agent, **remapped_arguments)
