@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 
 from openai import OpenAI
 
+from app.utility import Color
+
 from .skills import Skillbox
 from .tools import Toolbox
 
@@ -79,10 +81,12 @@ class Agent:
 
     def push_message(self, message: Dict[str, object]):
         self.messages.append(message)
-        print(f"{self.name}: message: {message['role']}: {message['content']!r}", file=sys.stderr)
+        print(f"{self.name}: message: {message['role']}: {Color.YELLOW}{message['content']!r}{Color.END}", file=sys.stderr)
 
     def loop(self) -> str:
         while True:
+            self.before_loop()
+
             chat = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=self.messages,
@@ -109,9 +113,13 @@ class Agent:
                         arguments = json.loads(tool_call.function.arguments)
 
                         arguments_str = ", ".join(f"{key}={repr(value)}" for key, value in arguments.items())
-                        print(f"{self.name}: tool call: {tool_name}({arguments_str})", file=sys.stderr)
+                        print(f"{self.name}: tool call: {Color.RED}{tool_name}({arguments_str}){Color.END}", file=sys.stderr)
 
                         result = self.toolbox.use(self, tool_call.function.name, arguments)
+                        
+                        post_results = self.toolbox.collect_async_messages(self)
+                        if post_results:
+                            result += "\n\n" + "\n".join(post_results)
 
                         message: Any = {
                             "role": "tool",
@@ -120,10 +128,18 @@ class Agent:
                         }
                         self.messages.append(message)
 
-                        print(f"{self.name}: message: {message['role']}: {message['content']!r}", file=sys.stderr)
+                        print(f"{self.name}: message: {message['role']}: {Color.GREEN}{message['content']!r}{Color.END}", file=sys.stderr)
 
                 case "stop":
                     return message.content
 
                 case _:
                     raise RuntimeError(f"unexpected finish reason: {choice.finish_reason}")
+
+    def before_loop(self):
+        async_messages = self.toolbox.collect_async_messages(self)
+        if len(async_messages):
+            self.push_message({
+                "role": "user",
+                "content": "\n".join(async_messages),
+            })

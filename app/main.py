@@ -40,7 +40,6 @@ def main():
         lsp_tool = LspTool(lsp_client)
         toolbox.add(lsp_tool)
         toolbox.add(WriteTool(
-            before_open=lsp_tool.notify_open,
             after_write=lsp_tool.notify_changed,
         ))
     else:
