@@ -112,11 +112,11 @@ class BashTool(Tool):
         import subprocess
 
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            result = subprocess.run(command, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             if result.returncode != 0:
-                return f"Error executing command {command}: {result.stderr.strip()}"
+                return f"Error executing command {command} (exit code {result.returncode}): {result.stdout.strip()}"
 
-            return result.stdout.strip()
+            return result.stdout.strip() or "<no output>"
         except Exception as error:
             return f"Error executing command {command}: {error}"
 
