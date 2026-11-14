@@ -4,6 +4,7 @@
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from typing import Any, Dict
@@ -22,6 +23,7 @@ class LSPClient:
         self.extension_to_language = self.call("configuration", {})["extensionToLanguage"]
 
     def call(self, action: str, payload: Dict[str, Any]):
+        print(f"Calling LSP action '{action}' with payload: {payload}", file=sys.stderr)
         request = urllib.request.Request(
             self.url + "/" + action,
             data=json.dumps(payload).encode("utf-8"),
