@@ -1,5 +1,6 @@
 import os
 import shlex
+import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
@@ -33,6 +34,9 @@ class Tool(ABC):
     @abstractmethod
     def execute(self, agent: "Agent", **kwargs: Any) -> Any:
         pass
+
+    def collect_async_message(self, agent: "Agent") -> Optional[str]:
+        return None
 
 
 class ReadTool(Tool):
@@ -93,7 +97,13 @@ class WriteTool(Tool):
         if self.after_write:
             self.after_write(file_path, content)
 
-        return f"Successfully wrote {len(content)} characters to {file_path}"
+        message = f"Successfully wrote {len(content)} characters to {file_path}"
+
+        async_messages = agent.toolbox.collect_async_messages(agent)
+        if async_messages:
+            message += "\n\n" + "\n".join(async_messages)
+
+        return message
 
 
 class BashTool(Tool):
@@ -196,6 +206,8 @@ class LspTool(Tool):
         }
 
         self._file_versions: Dict[str, int] = defaultdict(int)
+        self._notifications_cursor = 0
+        self._pending_notifications: List[Dict[str, Any]] = []
 
     def execute(self, agent: "Agent", operation: str, file_path: str, line: int, character: int, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         file_path = os.path.abspath(file_path)
@@ -207,6 +219,9 @@ class LspTool(Tool):
             return handler(file_path, line, character)
 
         return "LSP is not implemented yet"
+
+    def collect_async_message(self, agent: "Agent"):
+        return self.collect_diagnostics(agent)
 
     def _to_uri(self, file_path: str) -> str:
         return f"file://{os.path.abspath(file_path)}"
@@ -236,7 +251,11 @@ class LspTool(Tool):
         return uri, version
 
     def notify_changed(self, file_path: str, content: str) -> Tuple[str, int]:
-        uri, version = self.notify_open(file_path)
+        uri = self._to_uri(file_path)
+        version = self._file_versions[uri]
+
+        if version == 0:
+            return self.notify_open(file_path)
 
         version += 1
         self._file_versions[uri] = version
@@ -255,6 +274,102 @@ class LspTool(Tool):
 
         return uri, version
 
+    def on_file_written(self, file_path: str, content: str):
+        uri = self._to_uri(file_path)
+
+        self._fetch_notifications(0)
+        self._pending_notifications = [
+            notification
+            for notification in self._pending_notifications
+            if not self._is_diagnostics_for(notification, uri)
+        ]
+
+        uri, version = self.notify_changed(file_path, content)
+
+        extension = os.path.splitext(file_path)[1]
+        if extension in self.client.extension_to_language:
+            self.wait_for_diagnostics(uri, version)
+
+    def _fetch_notifications(self, timeout_ms: int = 0) -> List[Dict[str, Any]]:
+        response = self.client.notifications(self._notifications_cursor, timeout_ms)
+        self._notifications_cursor = response["cursor"]
+
+        notifications: List[Dict[str, Any]] = response.get("notifications") or []
+        self._pending_notifications.extend(notifications)
+
+        return notifications
+
+    def _is_diagnostics_for(self, notification: Dict[str, Any], uri: str, version: Optional[int] = None) -> bool:
+        if notification.get("method") != "textDocument/publishDiagnostics":
+            return False
+
+        params: Dict[str, Any] = notification.get("params") or {}
+        if params.get("uri") != uri:
+            return False
+
+        notification_version = params.get("version")
+        return version is None or notification_version is None or notification_version == version
+
+    def wait_for_diagnostics(self, uri: str, version: int, timeout_seconds: float = 5.0) -> bool:
+        """Block until the server publishes diagnostics for `uri` at `version`, or the timeout expires."""
+
+        deadline = time.monotonic() + timeout_seconds
+
+        while True:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                return False
+
+            notifications = self._fetch_notifications(remaining_ms)
+            if any(self._is_diagnostics_for(notification, uri, version) for notification in notifications):
+                return True
+
+            if not notifications:
+                time.sleep(0.05)  # in case the endpoint does not honor the timeout
+
+    def collect_diagnostics(self, agent: "Agent"):
+        self._fetch_notifications(0)
+        notifications, self._pending_notifications = self._pending_notifications, []
+
+        latest_per_uri: Dict[str, List[Dict[str, Any]]] = {}
+
+        for notification in notifications:
+            if notification.get("method") != "textDocument/publishDiagnostics":
+                continue
+
+            params = notification["params"]
+
+            uri = params["uri"]
+            version = params.get("version")
+            if version is not None and self._file_versions.get(uri) != version:
+                continue
+
+            # last one wins
+            latest_per_uri[uri] = params.get("diagnostics") or []
+
+        diagnostics_per_uri = {
+            uri: diagnostics
+            for uri, diagnostics in latest_per_uri.items()
+            if diagnostics
+        }
+
+        if not diagnostics_per_uri:
+            return None
+
+        reply = StringIO()
+        reply.write("<new-diagnostics>The following new diagnostic issues were detected:\n")
+
+        for uri, diagnostics in diagnostics_per_uri.items():
+            reply.write(f"\n{self._display_path(uri)}:")
+
+            for diagnostic in diagnostics:
+                location = f"[Line {self._to_range_string(diagnostic['range']['start'])}]" if 'range' in diagnostic else "[File]"
+                reply.write(f"\n  {location}: {diagnostic['message']}")
+
+        reply.write("</new-diagnostics>")
+
+        return reply.getvalue()
+
     def go_to_definition(self, file_path: str, line: int, character: int) -> str:
         uri, version = self.notify_open(file_path)
 
@@ -263,7 +378,12 @@ class LspTool(Tool):
             "position": {"line": line - 1, "character": character - 1}
         })
 
-        return f"Defined in {response['uri']}, from {self._to_range_string(response['range']['start'])} to {self._to_range_string(response['range']['end'])}"
+        if not response:
+            return "No definition found"
+
+        uri = response.get("uri")
+        range = response.get("range")
+        return f"Defined in {uri}, from {self._to_range_string(range['start'])} to {self._to_range_string(range['end'])}"
 
     def find_references(self, file_path: str, line: int, character: int) -> str:
         uri, version = self.notify_open(file_path)
@@ -273,6 +393,9 @@ class LspTool(Tool):
             "position": {"line": line - 1, "character": character - 1},
             "context": {"includeDeclaration": True}
         })
+
+        if not response:
+            return "No references found"
 
         range_by_uri: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         reference_count = 0
@@ -288,12 +411,18 @@ class LspTool(Tool):
         reply.write(f"Found {reference_count} references across {len(range_by_uri)} files:\n")
 
         for uri, ranges in range_by_uri.items():
-            reply.write(f"\n{uri.lstrip('file://')}:")
+            reply.write(f"\n{self._display_path(uri)}:\n")
 
             for range in ranges:
                 reply.write(f"  Line {self._to_range_string(range['start'])}\n")
 
         return reply.getvalue()
+
+    def _display_path(self, uri: str) -> str:
+        if uri.startswith("file://"):
+            uri = uri[7:]
+
+        return os.path.relpath(uri)
 
     def _to_range_string(self, range: Dict[str, Any]) -> str:
         return f"{range['line'] + 1}:{range['character'] + 1}"
@@ -361,3 +490,13 @@ class Toolbox:
             remapped_arguments[python_name] = arguments[original_name]
 
         return tool.execute(agent, **remapped_arguments)
+
+    def collect_async_messages(self, agent: "Agent") -> List[str]:
+        results: List[str] = []
+
+        for tool in self.tool_by_name.values():
+            result = tool.collect_async_message(agent)
+            if result:
+                results.append(result)
+
+        return results
