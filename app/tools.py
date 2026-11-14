@@ -34,6 +34,9 @@ class Tool(ABC):
     def execute(self, agent: "Agent", **kwargs: Any) -> Any:
         pass
 
+    def collect_async_message(self, agent: "Agent") -> Optional[str]:
+        return None
+
 
 class ReadTool(Tool):
 
@@ -90,10 +93,16 @@ class WriteTool(Tool):
         except Exception as error:
             return f"Error writing to file {file_path}: {error}"
 
+        async_messages = agent.toolbox.collect_async_messages(agent)
+
         if self.after_write:
             self.after_write(file_path, content)
 
-        return f"Successfully wrote {len(content)} characters to {file_path}"
+        message = f"Successfully wrote {len(content)} characters to {file_path}"
+        if async_messages:
+            message += f"\n{'\n'.join(async_messages)}"
+
+        return message
 
 
 class BashTool(Tool):
@@ -196,6 +205,7 @@ class LspTool(Tool):
         }
 
         self._file_versions: Dict[str, int] = defaultdict(int)
+        self._diagnostics_cursor = 0
 
     def execute(self, agent: "Agent", operation: str, file_path: str, line: int, character: int, **kwargs: Any) -> str:  # pyright: ignore[reportIncompatibleMethodOverride]
         file_path = os.path.abspath(file_path)
@@ -207,6 +217,9 @@ class LspTool(Tool):
             return handler(file_path, line, character)
 
         return "LSP is not implemented yet"
+
+    def collect_async_message(self, agent: "Agent"):
+        return self.collect_diagnostics(agent)
 
     def _to_uri(self, file_path: str) -> str:
         return f"file://{os.path.abspath(file_path)}"
@@ -236,7 +249,11 @@ class LspTool(Tool):
         return uri, version
 
     def notify_changed(self, file_path: str, content: str) -> Tuple[str, int]:
-        uri, version = self.notify_open(file_path)
+        uri = self._to_uri(file_path)
+        version = self._file_versions[uri]
+
+        if version == 0:
+            return self.notify_open(file_path)
 
         version += 1
         self._file_versions[uri] = version
@@ -254,6 +271,46 @@ class LspTool(Tool):
         })
 
         return uri, version
+
+    def collect_diagnostics(self, agent: "Agent"):
+        response = self.client.notifications(self._diagnostics_cursor)
+
+        self._diagnostics_cursor = response["cursor"]
+
+        diagnostics_per_uri: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+        for notification in response["notifications"]:
+            method = notification["method"]
+            if method != "textDocument/publishDiagnostics":
+                continue
+
+            params = notification["params"]
+
+            uri = params["uri"]
+            version = params.get("version")
+            if version is not None and self._file_versions.get(uri) != version:
+                continue
+
+            diagnostics = params["diagnostics"]
+            for diagnostic in diagnostics:
+                diagnostics_per_uri[uri].append(diagnostic)
+
+        if not len(diagnostics_per_uri):
+            return
+
+        reply = StringIO()
+        reply.write("<new-diagnostics>The following new diagnostic issues were detected:\n")
+
+        for uri, diagnostics in diagnostics_per_uri.items():
+            reply.write(f"\n{os.path.relpath(uri.lstrip('file://'))}:")
+
+            for diagnostic in diagnostics:
+                location = f"[Line {self._to_range_string(diagnostic['range']['start'])}]" if 'range' in diagnostic else "[File]"
+                reply.write(f"\n  {location}: {diagnostic['message']}")
+
+        reply.write("</new-diagnostics>")
+
+        return reply.getvalue()
 
     def go_to_definition(self, file_path: str, line: int, character: int) -> str:
         uri, version = self.notify_open(file_path)
@@ -288,7 +345,7 @@ class LspTool(Tool):
         reply.write(f"Found {reference_count} references across {len(range_by_uri)} files:\n")
 
         for uri, ranges in range_by_uri.items():
-            reply.write(f"\n{uri.lstrip('file://')}:")
+            reply.write(f"\n{os.path.relpath(uri.lstrip('file://'))}:")
 
             for range in ranges:
                 reply.write(f"  Line {self._to_range_string(range['start'])}\n")
@@ -361,3 +418,13 @@ class Toolbox:
             remapped_arguments[python_name] = arguments[original_name]
 
         return tool.execute(agent, **remapped_arguments)
+
+    def collect_async_messages(self, agent: "Agent") -> List[str]:
+        results: List[str] = []
+
+        for tool in self.tool_by_name.values():
+            result = tool.collect_async_message(agent)
+            if result:
+                results.append(result)
+
+        return results
